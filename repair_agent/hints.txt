@@ -1,57 +1,86 @@
-1: Think of mutating comparison operators in a condition, e.g, < to >= and == to !=... Consider all possibilities and combinations even == to >, != to <= ...for example.
-    Original: if x < 10:
-    Fix: if x >= 10:
-- 2: Think of replacing variables with explicit values (when possible) or with close variable names
-    Original: result = add(x, y)
-    Fix: result = add(5, 8)
-    
-    Original: mult = y + 1
-    Fix:  add = z + 1
-- 3: Consider changing some tokens partially, e.g, minXXX to maxXXX startXXX to endXXX, vice versa and so on... (consider all possibilities)
-    Original: start_elements_valid = True
-    Fix: end_elements_valid = True
-- 4: Think of making conditions more complex (by adding 'and' / 'or' operators and the corresponding part) or less complex (by removing some of 'and'/ 'or' parts)
-    Original: if (x > 0 and y < 5):
-    More complex condition: if (x > 0 and y < 5 and z == 10):
-    Less complex condition: if (x > 0):
-- 5: if your patch consists only of adding a comment or modifying a line into a comment, you should discard the patch and try to suggest mutation of the buggy line(s) of code instead
-    Orginal: '// Modify the logic for finding wrap position and padding text here to address the bug'
-    Fix: pos = findWrapperPosition(text, width, start);
-- 6: in some cases you will be required to insert new lines of code, you should consider adding more lines at given location. Usually, the code around the insertion location give you an idea about the lines to insert. Also the type of assertion failure.
-    Example:
-     if (!Double.isNaN(v)) {
-        min = Math.min(minimum, v);
-+       max = Math.max(maximum, v); // insertion happened here
-        }
-    if (!Double.isNaN(u)) {
-+       minimum = Math.min(min, u);// insertion happened here
-        maximum = Math.max(max, u);
-        }
-- 7: pay attention to the comments and doc string above the buggy code, specifically if any important comments exist above or next to buggy lines.
-    Example:
-    // - verify the header checksum
-    This comment indicates that a verification of the header checksum, which can be done by calling a method dedicated for that.
-- 8: the usual fix of some null pointer exceptions is to add a condition on the variable(s) that can be null.
-    Original: entity.create()
-    Fix: if (entity != null){
-        entity.create()
-    }
-- 9: Do not modify a file by replacing lines with a comment. If you want to delete a line you can add its number to the list of lines to delete.
-Always suggest code and not comments only.
-Example of forbidden fix because it only writes a comment and not actual code:
-    {
-        modifications: [{"line_number": 105, "modified_line": "// need to improve this code"}]
-    }
-- 10: Pay attention the type of variables. The code before and after the buggy lines might give hints of what the type of a variable should be.
-Example:
-    int x = 20;
-    double y = x * x; // x should have been declared as double in the previous line
-- 11: You also should be careful with types in java, especially numerical types.
-For example int * int might produce a double which means it should be stored in double variable
-Another example is int + int would also produce double.
+1: Replaces a relational operator with any other relational operator, covering boundary shifts (< to <=), negations (== to !=), and any other swap.
+Original: if (a < b)
+Mutated: if (a <= b) (or >, >=, ==, !=)
 
-- 12: If the buggy line is a method signature, consider changing the signature of the method. Also, consider checking similar methods or neighboring methods by searching the code base.
-Examples:
-    change private to public or protected and vice-versa
-    change the type of an argument
-    add or remove an argument
+2: Replaces one binary arithmetic operator (+, -, *, /, %) with a different one to verify the correct mathematical operation was used.
+Original: a + b
+Mutated: a * b (or -, /, %)
+
+3: Swaps an increment operator with a decrement operator (and vice versa), keeping the unary operator present but flipping its direction.
+Original: i++
+Mutated: i--
+
+4: Shifts an increment or decrement operator from postfix to prefix (or vice versa) to test whether the exact timing of the variable's evaluation matters.
+Original: int b = a++;
+Mutated: int b = ++a;
+
+5: Inserts a unary operator on a plain variable, or removes a unary operator currently applied to one. Covers negation, logical NOT, and bitwise NOT insertion or removal (-, !, ~).
+Original: a (or -a)
+Mutated: -a (or a)
+
+6: Replaces an inline numeric constant with a boundary variation — the value ±1, 0, 1, or its negation.
+Original: 100
+Mutated: 101 (or 99, -100, 0, 1)
+
+7: Replaces a boolean return expression with the opposite/alternative constant value (true → false, false → true, or any boolean expression → true/false).
+Original: return isValid;
+Mutated: return true; (or return false;)
+
+8: Replaces the right‑hand side of a primitive variable assignment (int, long, double, boolean, etc.) with the Java default for that type — 0 for numeric types, false for boolean.
+Original: boolean isActive = true;
+Mutated: boolean isActive = false;
+
+9: Deletes the operator in a binary arithmetic expression, replacing the entire expression with just one of its operands.
+Original: a + b
+Mutated: a (or b)
+
+10: Replaces a bitwise operator (&, |, ^) with a different bitwise operator.
+Original: a & b
+Mutated: a | b (or a ^ b)
+
+11: Replaces a short-circuit logical AND (&&) with a logical OR (||) and vice versa. This tests higher-level branch logic independently from bitwise (&, |) operators.
+Original: if (a != null && a.isValid())
+Mutated: if (a != null || a.isValid())
+
+12: Replaces a variable reference with another variable of the exact same (or compatible) type that is currently in scope to ensure the correct data source is being used.
+Original: int area = width * width;
+Mutated: int area = width * height;
+
+13: Removes the this. or super. prefix from a variable or method call. This tests whether local variables are accidentally shadowing class fields, or if a subclass method behaves differently than the parent.
+Original: this.value = value;
+Mutated: value = value;
+
+14: Replaces the target type in an explicit cast with a compatible sibling type (i.e., a different subclass of the same parent, or a different type in the same hierarchy) to fix incorrect polymorphic assumptions or copy-paste errors.
+Original: Customer user = (Customer) session.getActiveUser();
+Mutated: Admin user = (Admin) session.getActiveUser(); (or other subclasses of the User parent)
+
+15: Replaces a variable reference with a hardcoded literal value (or vice versa) to correct bad parameter passing or hardcoded assumptions.
+Original: result = add(x, y);
+Mutated: result = add(5, y);
+
+16: Replaces a variable or method name with its semantic opposite or related term (e.g., swapping min to max, start to end). Constraint: Only swap to an identifier that is explicitly visible and declared in the provided code context to avoid compilation errors.
+Original: boolean startElementsValid = true;
+Mutated: boolean endElementsValid = true; (Only if endElementsValid is in scope)
+
+17: Expands or reduces a complex conditional expression by inserting a missing logical clause or deleting an overly restrictive one.
+Original: if (x > 0 && y < 5)
+Mutated: if (x > 0) (or if (x > 0 && y < 5 && z == 10))
+
+18: Inserts missing contextual statements (new lines of code) to complete a clearly unfinished logical sequence, such as updating a parallel variable.
+Original: min = Math.min(minimum, v);
+Mutated: min = Math.min(minimum, v);
+max = Math.max(maximum, v);
+
+19: Wraps vulnerable statements in a safety guard condition to prevent runtime exceptions like NullPointerException or IndexOutOfBoundsException.
+Original: entity.create();
+Mutated: if (entity != null) {
+    entity.create();
+}
+
+20: Alters the declared type of a local variable to prevent precision loss or overflow (e.g., promoting an int to a double). Constraint: If you promote a type, you must also add explicit downcasts (e.g., (int)) to any immediate downstream usages that strictly require the original type.
+Original: int result = x * x; \n processInt(result);
+Mutated: double result = x * x; \n processInt((int) result);
+
+21: Modifies a method signature's arguments to match intended logic. Constraint: ONLY apply this to private methods where all call sites are visible in the provided code, OR ensure you also update every visible call site in the provided snippet to match the new signature.
+Original: private void process(String data)
+Mutated: private void process(String data, int timeout)

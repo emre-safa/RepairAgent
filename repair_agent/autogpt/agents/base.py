@@ -828,13 +828,54 @@ please use the indicated format and produce a list, like this:
         with open("hints.txt") as htt:
             hints = htt.read()
 
-        list_example = '[{"file_name": "org/apache/commons/codec/binary/Base64.java", "insertions": [], "deletions": [], "modifications": [{"line_number": 225, "modified_line": "        this(true);"}]}, {"file_name": "org/apache/commons/codec/binary/Base64.java", "insertions": [], "deletions": [], "modifications": [{"line_number": 225, "modified_line": "        this(null);"}]}, {"file_name": "org/apache/commons/codec/binary/Base64.java", "insertions": [], "deletions": [], "modifications": [{"line_number": 225, "modified_line": "        this(1==0);"}]}, {"file_name": "org/apache/commons/codec/binary/Base64.java", "insertions": [], "deletions": [], "modifications": [{"line_number": 225, "modified_line": "        this(1 - 2);"}]}, ...]'
-        context_prompt += "Here are some hints that might help you in suggesting good mutations:\n" + hints + "\n\n"
+        context_prompt += "Here are the 21 allowed mutation strategies. You MUST select one of these for every mutant; do NOT invent or use any strategy outside this list:\n" + hints + "\n\n"
         context_prompt += detailed_buggies
-        context_prompt += "Task for assistant:  generate 30 mutants of the target buggy lines. Respect the fix format, only change values (never touch keys). For every mutant generate a full fix dictionary. Put the 30 mutants in a main list."
-        # For example: {}. Make sure your output is json parsable.".format(list_example)
 
-        context_prompt += "To generate the list of your mutations, fillout the following template multiple time with different variants:\n"
+        context_prompt += (
+            "Task for assistant: generate 30 mutants of the target buggy lines under the following STRICT rules.\n"
+            "1. Strict Mutation Types: Each mutant MUST correspond to exactly one of the 21 mutation strategies listed above. Mutants that do not fit any of the 21 strategies are NOT allowed.\n"
+            "2. Mandatory Documentation: For every mutant you MUST include two extra fields alongside the fix dictionary:\n"
+            "   - \"mutation_type\": an integer from 1 to 21 identifying which hint strategy was used.\n"
+            "   - \"mutation_comment\": a one-sentence string explaining exactly what was mutated and why it corresponds to that strategy.\n"
+            "3. Explicit Classification: The two fields above must explicitly state which of the 21 mutation types from the hints was applied and briefly describe what the mutant does.\n"
+            "4. Respect the fix format: only change values, never touch keys. For every mutant generate a full fix dictionary (the same keys as the template) plus the two extra fields described above.\n"
+            "5. Put the 30 mutants in a single main list.\n\n"
+        )
+
+        context_prompt += (
+            "Examples of the expected output structure (each list element is a fix dictionary augmented with mutation_type and mutation_comment):\n"
+            "[\n"
+            "  {\n"
+            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+            "    \"insertions\": [],\n"
+            "    \"deletions\": [],\n"
+            "    \"modifications\": [{\"line_number\": 225, \"modified_line\": \"        if (a <= b) {\"}],\n"
+            "    \"mutation_type\": 1,\n"
+            "    \"mutation_comment\": \"Replaced the relational operator '<' with '<=' on line 225 to test a boundary shift (strategy 1).\"\n"
+            "  },\n"
+            "  {\n"
+            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+            "    \"insertions\": [],\n"
+            "    \"deletions\": [],\n"
+            "    \"modifications\": [{\"line_number\": 230, \"modified_line\": \"        int total = a * b;\"}],\n"
+            "    \"mutation_type\": 2,\n"
+            "    \"mutation_comment\": \"Swapped the arithmetic operator '+' for '*' to verify the correct mathematical operation (strategy 2).\"\n"
+            "  },\n"
+            "  {\n"
+            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+            "    \"insertions\": [{\"line_number\": 241, \"inserted_line\": \"        if (entity != null) {\"}, {\"line_number\": 243, \"inserted_line\": \"        }\"}],\n"
+            "    \"deletions\": [],\n"
+            "    \"modifications\": [],\n"
+            "    \"mutation_type\": 19,\n"
+            "    \"mutation_comment\": \"Wrapped the call to entity.create() in a null check to guard against a NullPointerException (strategy 19).\"\n"
+            "  }\n"
+            "]\n\n"
+        )
+
+        context_prompt += (
+            "To generate the list of your mutations, fill out the following template multiple times with different variants. "
+            "Remember: every entry MUST include the two extra fields mutation_type (1-21) and mutation_comment.\n"
+        )
         context_prompt += fix_template + "\n"
         return context_prompt
 
