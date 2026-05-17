@@ -94,6 +94,16 @@ import click
     help="the path to the file containing the configuration of the agent for the experiment.",
 )
 @click.option(
+    "--experiment-dir",
+    type=str,
+    multiple=False,
+    help=(
+        "Name of the experiment folder (relative to experimental_setups/) this run "
+        "should write into. When omitted, falls back to the last line of "
+        "experimental_setups/experiments_list.txt."
+    ),
+)
+@click.option(
     "--model",
     "-M",
     type=str,
@@ -122,6 +132,7 @@ def main(
     ai_role: Optional[str],
     ai_goal: tuple[str],
     experiment_file: str,
+    experiment_dir: Optional[str],
     model: Optional[str],      # NEW!
 ) -> None:
     """
@@ -154,6 +165,7 @@ def main(
             ai_role=ai_role,
             ai_goals=ai_goal,
             experiment_file=experiment_file,
+            experiment_dir=experiment_dir,
             model=model,       # Pass through!
         )
 

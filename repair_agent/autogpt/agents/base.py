@@ -39,9 +39,11 @@ class BaseAgent(metaclass=ABCMeta):
         cycle_budget: Optional[int] = 1,
         send_token_limit: Optional[int] = None,
         summary_max_tlength: Optional[int] = None,
-        experiment_file: str = None
+        experiment_file: str = None,
+        experiment_dir: str = None,
     ):
         self.experiment_file = experiment_file
+        self.experiment_dir = experiment_dir
         self.ai_config = ai_config
         """The AIConfig or "personality" object associated with this agent."""
 
@@ -196,8 +198,18 @@ class BaseAgent(metaclass=ABCMeta):
         self.auto_complete = True
         self.generated_methods = None
         self.dummy_fix = False
-        with open("experimental_setups/experiments_list.txt") as eht:
-            self.exps = eht.read().splitlines()
+
+        # Fallback: when no --experiment-dir is passed (e.g. when autogpt is
+        # invoked directly without the run_on_defects4j.sh wrapper), default to
+        # the last entry of experiments_list.txt, preserving the legacy path.
+        if self.experiment_dir is None:
+            try:
+                with open("experimental_setups/experiments_list.txt") as eht:
+                    exps_list = eht.read().splitlines()
+                if exps_list:
+                    self.experiment_dir = exps_list[-1]
+            except FileNotFoundError:
+                pass
 
     def save_context(self,):
         context = {
@@ -227,11 +239,9 @@ class BaseAgent(metaclass=ABCMeta):
             "history": [{"role": msg.role, "content": msg.content} for _, msg in enumerate(self.history)]
         }
 
-        exps = self.exps
-
-        with open(os.path.join("experimental_setups", exps[-1], "saved_contexts", "saved_context_{}_{}".format(self.project_name, self.bug_index)), "w") as patf:
+        with open(os.path.join("experimental_setups", self.experiment_dir, "saved_contexts", "saved_context_{}_{}".format(self.project_name, self.bug_index)), "w") as patf:
             json.dump(context, patf)
-        
+
 
     def construct_pre_info(self, ):
         query = "I have a set of functions that help me analyze and repair buggy code. I will give you the description of the functions (I also call them commands), and the buggy piece of code and tell me what commands would make sense to call to get more info about the bug.\n"
@@ -292,8 +302,7 @@ please use the indicated format and produce a list, like this:
                 self.pre_similar += "Search query {} found the following similar functions calls:\n{}\n\n".format(str(args), exec_result)
 
     def load_context(self,):
-        exps = self.exps
-        with open(os.path.join("experimental_setups", exps[-1], "saved_contexts", "saved_context_{}_{}".format(self.project_name, self.bug_index)), "r") as patf:
+        with open(os.path.join("experimental_setups", self.experiment_dir, "saved_contexts", "saved_context_{}_{}".format(self.project_name, self.bug_index)), "r") as patf:
             context = json.load(patf)
 
         self.cycle_budget = context["cycle_budget"]
@@ -951,10 +960,9 @@ please use the indicated format and produce a list, like this:
         in_between = prompt_text[start_i:end_i]
         project_name, bug_index = in_between.replace("bug within the project ", "").replace(' and bug index ', " ").replace('"', "").split(" ")[:2]
 
-        exps = self.exps
-        with open(os.path.join("experimental_setups", exps[-1], "logs", "prompt_history_{}_{}".format(project_name, bug_index)), "a+") as patf:
+        with open(os.path.join("experimental_setups", self.experiment_dir, "logs", "prompt_history_{}_{}".format(project_name, bug_index)), "a+") as patf:
             patf.write(prompt.dump())
-        
+
         # handle querying strategy
         # For now, we do not evaluate the external query
         # we just want to observe how good is it
@@ -962,7 +970,7 @@ please use the indicated format and produce a list, like this:
             if self.cycle_count % self.hyperparams["external_fix_strategy"] == 0:
                 query = self.construct_fix_query()
                 suggested_fixes = query_for_fix(query, self.config.static_llm)
-                self.save_to_json(os.path.join("experimental_setups", exps[-1], "external_fixes", "external_fixes_{}_{}.json".format(project_name, bug_index)), json.loads(suggested_fixes))
+                self.save_to_json(os.path.join("experimental_setups", self.experiment_dir, "external_fixes", "external_fixes_{}_{}.json".format(project_name, bug_index)), json.loads(suggested_fixes))
 
         raw_response = create_chat_completion(
             prompt,

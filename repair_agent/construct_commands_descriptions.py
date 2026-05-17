@@ -1,4 +1,5 @@
 import json
+import os
 
 
 ## trying out candidate fixes
@@ -43,5 +44,8 @@ commands_dict = {
         [extract_test_desc, express_hypo_desc, read_range_desc])])
 }
 
-with open("commands_by_state.json", "w") as cbs:
+target_path = "commands_by_state.json"
+tmp_path = "{}.tmp.{}".format(target_path, os.getpid())
+with open(tmp_path, "w") as cbs:
     json.dump(commands_dict, cbs)
+os.replace(tmp_path, target_path)

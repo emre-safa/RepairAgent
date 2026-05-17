@@ -58,6 +58,7 @@ def run_auto_gpt(
     ai_role: Optional[str] = None,
     ai_goals: tuple[str] = tuple(),
     experiment_file: str = None,
+    experiment_dir: Optional[str] = None,
     model: Optional[str] = None,
 ):
     if not experiment_file:
@@ -177,7 +178,8 @@ def run_auto_gpt(
         triggering_prompt=DEFAULT_TRIGGERING_PROMPT,
         ai_config=ai_config,
         config=config,
-        experiment_file = experiment_file
+        experiment_file=experiment_file,
+        experiment_dir=experiment_dir,
     )
 
     run_interaction_loop(agent)

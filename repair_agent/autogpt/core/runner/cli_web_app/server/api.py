@@ -65,8 +65,14 @@ async def interaction_step(
     if command_name is not None:
         result = agent.execute(command_name, command_args, user_input)
         if " 0 failing test" in result:
-            with open(os.path.join("experimental_setups", exps[-1], "plausible_patches", "plausible_patches_{}_{}.json".format(agent.project_name, agent.bug_index)), "a+") as exps:
-                exps.write("### PLAUSIBLE FIX\n{}\n".format(str(command_args["changes_dicts"])))
+            plausible_path = os.path.join(
+                "experimental_setups",
+                agent.experiment_dir,
+                "plausible_patches",
+                "plausible_patches_{}_{}.json".format(agent.project_name, agent.bug_index),
+            )
+            with open(plausible_path, "a+") as patch_file:
+                patch_file.write("### PLAUSIBLE FIX\n{}\n".format(str(command_args["changes_dicts"])))
         if result is None:
             logger.typewriter_log("SYSTEM: ", Fore.YELLOW, "Unable to execute command")
             return

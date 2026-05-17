@@ -43,7 +43,8 @@ class Agent(BaseAgent):
         triggering_prompt: str,
         config: Config,
         cycle_budget: Optional[int] = None,
-        experiment_file: str = None
+        experiment_file: str = None,
+        experiment_dir: str = None,
     ):
         super().__init__(
             ai_config=ai_config,
@@ -51,7 +52,8 @@ class Agent(BaseAgent):
             config=config,
             default_cycle_instruction=triggering_prompt,
             cycle_budget=cycle_budget,
-            experiment_file = experiment_file
+            experiment_file=experiment_file,
+            experiment_dir=experiment_dir,
         )
 
         self.memory = memory
@@ -128,8 +130,7 @@ class Agent(BaseAgent):
             patch_data: The patch content (dict or list of dicts).
             source: Where this patch came from (e.g. "mutant", "write_fix", "try_fixes").
         """
-        exps = self.exps
-        plausible_dir = os.path.join("experimental_setups", exps[-1], "plausible_patches")
+        plausible_dir = os.path.join("experimental_setups", self.experiment_dir, "plausible_patches")
         os.makedirs(plausible_dir, exist_ok=True)
         plausible_path = os.path.join(
             plausible_dir,
@@ -214,8 +215,7 @@ class Agent(BaseAgent):
         if not llm_response.content:
             raise SyntaxError("Assistant response has no text content")
 
-        exps = self.exps
-        with open(os.path.join("experimental_setups", exps[-1], "responses", "model_responses_{}_{}".format(self.project_name, self.bug_index)), "a+") as patf:
+        with open(os.path.join("experimental_setups", self.experiment_dir, "responses", "model_responses_{}_{}".format(self.project_name, self.bug_index)), "a+") as patf:
             patf.write(llm_response.content)
         assistant_reply_dict = extract_dict_from_response(llm_response.content)
 
@@ -284,20 +284,19 @@ class Agent(BaseAgent):
                 # create mutation prompt
                 mutant_prompt = self.construct_mutation_prompt(fix_content, detailed_buggies)
                 # save mutation prompt
-                with open(os.path.join("experimental_setups", exps[-1], "mutations_history", "mutations_prompt_{}_{}".format(self.project_name, self.bug_index)), "a") as mph:
+                with open(os.path.join("experimental_setups", self.experiment_dir, "mutations_history", "mutations_prompt_{}_{}".format(self.project_name, self.bug_index)), "a") as mph:
                     mph.write(mutant_prompt)
-                
+
                 # Asking main agent for mutants
                 mutants = query_for_mutants(mutant_prompt, self.config.static_llm)
-                
-                exps = self.exps
+
                 existing_mutants = []
-                mutants_save_path = os.path.join("experimental_setups", exps[-1], "mutations_history", "mutants_{}_{}.json".format(self.project_name, self.bug_index))
-                
+                mutants_save_path = os.path.join("experimental_setups", self.experiment_dir, "mutations_history", "mutants_{}_{}.json".format(self.project_name, self.bug_index))
+
                 if os.path.exists(mutants_save_path):
                     with open(mutants_save_path) as json_file:
                         existing_mutants = json.load(json_file)
-                with open(os.path.join("experimental_setups", exps[-1], "mutations_history", "mutants_raw_{}_{}.json".format(self.project_name, self.bug_index)), "a") as raw_m:
+                with open(os.path.join("experimental_setups", self.experiment_dir, "mutations_history", "mutants_raw_{}_{}.json".format(self.project_name, self.bug_index)), "a") as raw_m:
                     raw_m.write(mutants)
                 
                 try:

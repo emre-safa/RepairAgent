@@ -1,4 +1,5 @@
 import argparse
+import os
 
 template=\
 """ai_goals:
@@ -9,7 +10,7 @@ template=\
 - Iterative Testing: Repeat the debugging process iteratively, incorporating the insights gained from each iteration, until all test cases pass successfully.
 ai_name: RepairAgentV0.6.5
 ai_role: |
-  You are an AI assistant specialized in fixing bugs in Java code. 
+  You are an AI assistant specialized in fixing bugs in Java code.
   You will be given a buggy project, and your objective is to autonomously understand and fix the bug.
   You have three states, which each offer a unique set of commands,
    * 'collect information to understand the bug', where you gather information to understand a bug;
@@ -21,9 +22,14 @@ api_budget: 0.0
 parser = argparse.ArgumentParser()
 parser.add_argument("name")
 parser.add_argument("index")
+parser.add_argument("output_path", nargs="?", default="ai_settings.yaml")
 args = parser.parse_args()
 
 settings = template.format(name=args.name, bug_index=args.index)
 
-with open("ai_settings.yaml", "w") as set_yaml:
+output_dir = os.path.dirname(args.output_path)
+if output_dir:
+    os.makedirs(output_dir, exist_ok=True)
+
+with open(args.output_path, "w") as set_yaml:
     set_yaml.write(settings)
