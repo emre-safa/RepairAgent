@@ -1350,13 +1350,43 @@ def auto_complete_functions(project_name, bug_index, filepath, method_name, agen
 from fuzzywuzzy import fuzz
 def apply_changes(change_dict):
     file_name = change_dict.get("file_name", "")
-    insertions = change_dict.get("insertions", [])
+    insertions = change_dict.setdefault("insertions", [])
     deletions = change_dict.get("deletions", [])
-    modifications = change_dict.get("modifications", [])
+    modifications = change_dict.setdefault("modifications", [])
 
     # Read the original code from the file
     with open(file_name, 'r') as file:
         lines = file.readlines()
+
+    # Reclassify single-line insertions whose content closely resembles the
+    # existing line at the same number: the LLM likely meant a modification.
+    # Mutate the dict's lists in place so the saved plausible patch reflects
+    # the corrected intent (execute_write_range only shallow-copies the dict).
+    reclassified = set()
+    for i, ins in enumerate(insertions):
+        new_lines = ins.get("new_lines", [])
+        if len(new_lines) != 1:
+            continue
+        try:
+            line_number = int(ins.get("line_number", 0))
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= line_number <= len(lines)):
+            continue
+        new_content = new_lines[0]
+        if fuzz.ratio(lines[line_number - 1], new_content) < 70:
+            continue
+        reclassified.add(i)
+        duplicate = any(
+            int(m.get("line_number", 0)) == line_number
+            and m.get("modified_line", "") == new_content
+            for m in modifications
+        )
+        if not duplicate:
+            modifications.append({"line_number": line_number, "modified_line": new_content})
+
+    if reclassified:
+        insertions[:] = [ins for j, ins in enumerate(insertions) if j not in reclassified]
 
     # Apply deletions first to avoid conflicts with line number changes
     affected_lines = set()
