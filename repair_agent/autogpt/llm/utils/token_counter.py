@@ -65,6 +65,10 @@ def count_message_tokens(
         tokens_per_message = 3
         tokens_per_name = 1
         encoding_model = re.sub(r"(gpt-4(o|\.\d+)?).*", "\\1", model)
+    elif model.startswith("gpt-5"):
+        tokens_per_message = 3
+        tokens_per_name = 1
+        encoding_model = re.sub(r"(gpt-5(\.\d+)?).*", "\\1", model)
     else:
         # Unknown/future model — fall back to gpt-4 tokenizer as a reasonable approximation.
         logger.warn(
