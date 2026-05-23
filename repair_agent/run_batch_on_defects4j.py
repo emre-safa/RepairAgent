@@ -14,7 +14,11 @@ def run_bash_script(param):
         return None
 
 if __name__ == '__main__':
-    params_list = [("experimental_setups/batches/{}".format(i), "hyperparams.json", i) for i in range(20)]  # List of different parameter values
+    # Model selection is driven by SMART_LLM / FAST_LLM / STATIC_LLM env vars
+    # (or by --smart-model / --fast-model / --static-model on direct run.sh
+    # invocations). To use a single model for all roles instead, append it as
+    # a 3rd positional arg, e.g. ("…/batches/0", "hyperparams.json", "gpt-4o-mini", i).
+    params_list = [("experimental_setups/batches/{}".format(i), "hyperparams.json", i) for i in range(20)]
     finished_processes = []
 
     with multiprocessing.Pool() as pool:

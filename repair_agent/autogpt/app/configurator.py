@@ -31,7 +31,10 @@ def create_config(
     browser_name: str,
     allow_downloads: bool,
     skip_news: bool,
-    model: Optional[str] = None,   # NEW!
+    model: Optional[str] = None,
+    smart_model: Optional[str] = None,
+    fast_model: Optional[str] = None,
+    static_model: Optional[str] = None,
 ) -> None:
     """Updates the config object with the given arguments.
 
@@ -105,7 +108,19 @@ def create_config(
     else:
         config.fast_llm = check_model(config.fast_llm, "fast_llm", config=config)
         config.smart_llm = check_model(config.smart_llm, "smart_llm", config=config)
-        
+
+    # Per-role overrides take precedence over --model and env-var defaults.
+    if smart_model:
+        config.smart_llm = smart_model
+        logger.typewriter_log("smart_llm override:", Fore.GREEN, smart_model)
+    if fast_model:
+        config.fast_llm = fast_model
+        logger.typewriter_log("fast_llm override:", Fore.GREEN, fast_model)
+    if static_model:
+        config.static_llm = static_model
+        logger.typewriter_log("static_llm override:", Fore.GREEN, static_model)
+
+
     if memory_type:
         supported_memory = get_supported_memory_backends()
         chosen = memory_type

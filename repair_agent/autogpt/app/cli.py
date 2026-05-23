@@ -107,7 +107,25 @@ import click
     "--model",
     "-M",
     type=str,
-    help="Specify the OpenAI model to use (e.g., gpt-4o, gpt-4.1, gpt-4.1-mini, gpt-4o-mini, gpt-3.5-turbo, etc.)."
+    help=(
+        "Shortcut: set fast_llm, smart_llm, and static_llm all to this model. "
+        "Per-role flags (--smart-model / --fast-model / --static-model) override this."
+    ),
+)
+@click.option(
+    "--smart-model",
+    type=str,
+    help="Override smart_llm only. Takes precedence over --model and SMART_LLM env var.",
+)
+@click.option(
+    "--fast-model",
+    type=str,
+    help="Override fast_llm only. Takes precedence over --model and FAST_LLM env var.",
+)
+@click.option(
+    "--static-model",
+    type=str,
+    help="Override static_llm only. Takes precedence over --model and STATIC_LLM env var.",
 )
 
 @click.pass_context
@@ -133,7 +151,10 @@ def main(
     ai_goal: tuple[str],
     experiment_file: str,
     experiment_dir: Optional[str],
-    model: Optional[str],      # NEW!
+    model: Optional[str],
+    smart_model: Optional[str],
+    fast_model: Optional[str],
+    static_model: Optional[str],
 ) -> None:
     """
     Welcome to AutoGPT an experimental open-source application showcasing the capabilities of the GPT-4 pushing the boundaries of AI.
@@ -166,7 +187,10 @@ def main(
             ai_goals=ai_goal,
             experiment_file=experiment_file,
             experiment_dir=experiment_dir,
-            model=model,       # Pass through!
+            model=model,
+            smart_model=smart_model,
+            fast_model=fast_model,
+            static_model=static_model,
         )
 
 

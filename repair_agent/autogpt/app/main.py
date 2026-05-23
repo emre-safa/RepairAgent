@@ -60,6 +60,9 @@ def run_auto_gpt(
     experiment_file: str = None,
     experiment_dir: Optional[str] = None,
     model: Optional[str] = None,
+    smart_model: Optional[str] = None,
+    fast_model: Optional[str] = None,
+    static_model: Optional[str] = None,
 ):
     if not experiment_file:
         raise ValueError("Cannot proceed without experiment file")
@@ -90,7 +93,10 @@ def run_auto_gpt(
         browser_name,
         allow_downloads,
         skip_news,
-        model=model,    # Pass through to config
+        model=model,
+        smart_model=smart_model,
+        fast_model=fast_model,
+        static_model=static_model,
     )
 
     if config.continuous_mode:

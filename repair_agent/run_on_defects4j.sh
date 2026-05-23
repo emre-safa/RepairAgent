@@ -15,11 +15,18 @@ python3 construct_commands_descriptions.py
 
 input="$1"
 experiment_file="$2"
-model="${3:-gpt-4o-mini}"  # Use $3 if given, otherwise default to gpt-4o-mini
+# $3 is an optional model shortcut. When omitted, SMART_LLM / FAST_LLM /
+# STATIC_LLM env vars (or per-role flags below) control model selection.
+model="$3"
 
 dos2unix "$input"  # Convert file to Unix line endings (if needed)
 
 ai_settings_path="experimental_setups/$EXPERIMENT_DIR/ai_settings.yaml"
+
+model_args=()
+if [ -n "$model" ]; then
+    model_args+=(--model "$model")
+fi
 
 while IFS= read -r line || [ -n "$line" ]
 do
@@ -27,5 +34,5 @@ do
     echo ${tuple[0]}, ${tuple[1]}
     python3 prepare_ai_settings.py "${tuple[0]}" "${tuple[1]}" "$ai_settings_path"
     python3 checkout_py.py "${tuple[0]}" "${tuple[1]}"
-    ./run.sh --ai-settings "$ai_settings_path" --model "$model" -c -l 40 -m json_file --experiment-file "$experiment_file" --experiment-dir "$EXPERIMENT_DIR"
+    ./run.sh --ai-settings "$ai_settings_path" "${model_args[@]}" -c -l 40 -m json_file --experiment-file "$experiment_file" --experiment-dir "$EXPERIMENT_DIR"
 done < "$input"

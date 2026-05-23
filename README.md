@@ -216,7 +216,7 @@ For users who prefer the original shell-based workflow:
 |----------|-------------|---------|
 | `bugs_file` | Text file with one `Project BugIndex` per line | `experimental_setups/bugs_list` |
 | `hyperparams_file` | JSON file with agent hyperparameters | `hyperparams.json` |
-| `model` | Model name (optional, default: `gpt-4o-mini`) | `gpt-4o`, `claude-sonnet-4-20250514` |
+| `model` | Optional shortcut that sets `fast_llm`, `smart_llm`, and `static_llm` to the same model. Omit to use `SMART_LLM` / `FAST_LLM` / `STATIC_LLM` env vars instead. | `gpt-4o`, `claude-sonnet-4-20250514` |
 
 ### What happens during a run
 
@@ -227,18 +227,27 @@ For users who prefer the original shell-based workflow:
 
 ### Choosing the LLM model
 
-The `--model` flag (or third argument to `run_on_defects4j.sh`) sets **all** LLM models used by RepairAgent:
+The `--model` flag (or third argument to `run_on_defects4j.sh`) is a shortcut that sets **all three** LLM roles to the same model:
 
 - **Main agent** (`fast_llm` / `smart_llm`): drives the agent's reasoning loop
 - **Static/auxiliary** (`static_llm`): used for mutation generation, fix queries, and auto-completion
 
-For finer control, use environment variables:
+For finer control, use per-role CLI flags (which override `--model` and env vars):
 
 ```bash
-export FAST_LLM=gpt-4o-mini       # main agent fast model
-export SMART_LLM=gpt-4o           # main agent smart model
-export STATIC_LLM=gpt-4o-mini     # auxiliary LLM calls
+./run.sh --smart-model gpt-5-mini --fast-model gpt-5-mini --static-model gpt-4o-mini ...
 ```
+
+Or set environment variables (used when no `--model` / per-role flag is given):
+
+```bash
+export FAST_LLM=gpt-5-mini        # main agent fast model
+export SMART_LLM=gpt-5-mini       # main agent smart model
+export STATIC_LLM=gpt-4o-mini     # auxiliary LLM calls
+./run_on_defects4j.sh experimental_setups/batches/0 hyperparams.json   # omit 3rd arg
+```
+
+Precedence: per-role CLI flag > `--model` shortcut > env var > built-in default.
 
 ---
 

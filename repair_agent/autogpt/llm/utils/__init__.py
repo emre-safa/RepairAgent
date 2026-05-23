@@ -27,9 +27,25 @@ from ..providers.anthropic import is_anthropic_model
 from .token_counter import *
 
 # Models that require max_completion_tokens instead of max_tokens (and reject
-# temperature / response_format).  Populated on first failed call; avoids the
-# wasteful try→fail→retry cycle on every subsequent request to the same model.
+# temperature). Seeded with known prefixes so the first call doesn't waste a
+# round-trip discovering this; augmented at runtime for any unknown model that
+# surfaces the same incompatibility.
 _REASONING_MODELS: set[str] = set()
+_REASONING_MODEL_PREFIXES: tuple[str, ...] = ("o1", "o3", "o4", "gpt-5")
+
+# Reasoning models that also reject response_format={"type":"json_object"}.
+# Discovered at runtime via a retry; gpt-5 series supports it, o1 series does not.
+_NO_RESPONSE_FORMAT_MODELS: set[str] = set()
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return model in _REASONING_MODELS or model.startswith(_REASONING_MODEL_PREFIXES)
+
+
+def _supports_response_format(model: str) -> bool:
+    if is_anthropic_model(model):
+        return False
+    return model not in _NO_RESPONSE_FORMAT_MODELS
 
 
 def call_ai_function(
@@ -149,8 +165,9 @@ def create_chat_completion(
         "max_tokens": max_tokens,
     }
 
-    # Anthropic models don't support response_format or OpenAI functions
-    if not is_anthropic_model(model):
+    # Anthropic models don't support response_format or OpenAI functions.
+    # Some OpenAI reasoning models (e.g. o1 series) also reject it.
+    if _supports_response_format(model):
         chat_completion_kwargs["response_format"] = { "type": "json_object" }
 
     for plugin in config.plugins:
@@ -184,11 +201,12 @@ def create_chat_completion(
                 function.schema for function in functions
             ]
 
-        if model in _REASONING_MODELS:
+        if _is_reasoning_model(model):
             # Known reasoning model: go straight to the compatible kwargs.
+            # response_format is kept here — gpt-5 supports it; o1 incompatibility
+            # is discovered via the retry below on first failure.
             chat_completion_kwargs["max_completion_tokens"] = chat_completion_kwargs.pop("max_tokens")
             chat_completion_kwargs.pop("temperature", None)
-            chat_completion_kwargs.pop("response_format", None)
 
         try:
             response = iopenai.create_chat_completion(
@@ -197,6 +215,7 @@ def create_chat_completion(
             )
         except openai.error.InvalidRequestError as e:
             err = str(e)
+            retried = False
             if "max_tokens" in err and "max_completion_tokens" in err:
                 # Newer models (o1, o3, gpt-5-*…) use max_completion_tokens.
                 # Cache so subsequent calls skip this path.
@@ -206,13 +225,20 @@ def create_chat_completion(
                 )
                 chat_completion_kwargs["max_completion_tokens"] = chat_completion_kwargs.pop("max_tokens")
                 chat_completion_kwargs.pop("temperature", None)
-                chat_completion_kwargs.pop("response_format", None)
-                response = iopenai.create_chat_completion(
-                    messages=prompt.raw(),
-                    **chat_completion_kwargs,
+                retried = True
+            if "response_format" in err:
+                _NO_RESPONSE_FORMAT_MODELS.add(model)
+                logger.debug(
+                    f"Model {model} rejects response_format; caching and retrying."
                 )
-            else:
+                chat_completion_kwargs.pop("response_format", None)
+                retried = True
+            if not retried:
                 raise
+            response = iopenai.create_chat_completion(
+                messages=prompt.raw(),
+                **chat_completion_kwargs,
+            )
 
     logger.debug(f"Response: {response}")
 
