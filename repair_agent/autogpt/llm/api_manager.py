@@ -14,41 +14,72 @@ class ApiManager(metaclass=Singleton):
     def __init__(self):
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.total_reasoning_tokens = 0  # subset of total_completion_tokens
         self.total_cost = 0
         self.total_budget = 0
         self.models: Optional[list[Model]] = None
+        # Per-call snapshot, populated on every API response so the cycle
+        # summary can show reasoning vs visible breakdown against the cap.
+        self.last_call_model: Optional[str] = None
+        self.last_call_prompt_tokens: int = 0
+        self.last_call_completion_tokens: int = 0
+        self.last_call_reasoning_tokens: int = 0
+        self.last_call_max_completion_tokens: Optional[int] = None
 
     def reset(self):
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.total_reasoning_tokens = 0
         self.total_cost = 0
         self.total_budget = 0.0
         self.models = None
+        self.last_call_model = None
+        self.last_call_prompt_tokens = 0
+        self.last_call_completion_tokens = 0
+        self.last_call_reasoning_tokens = 0
+        self.last_call_max_completion_tokens = None
 
-    def update_cost(self, prompt_tokens, completion_tokens, model):
+    def set_last_call_cap(self, max_completion_tokens: Optional[int]) -> None:
+        """Recorded by the request-side wrapper so the cycle summary can show
+        how close the model got to its budget on the most recent call.
+        """
+        self.last_call_max_completion_tokens = max_completion_tokens
+
+    def update_cost(self, prompt_tokens, completion_tokens, model, reasoning_tokens: int = 0):
         """
         Update the total cost, prompt tokens, and completion tokens.
 
         Args:
         prompt_tokens (int): The number of tokens used in the prompt.
         completion_tokens (int): The number of tokens used in the completion.
+            For reasoning models this includes invisible reasoning tokens.
         model (str): The model used for the API call.
+        reasoning_tokens (int): Subset of completion_tokens spent on invisible
+            reasoning (0 for non-reasoning models).
         """
         # the .model property in API responses can contain version suffixes like -v2
         from autogpt.llm.providers.openai import ALL_MODELS
 
         model = model[:-3] if model.endswith("-v2") else model
 
+        # Per-call snapshot — always recorded, regardless of cost-table coverage.
+        self.last_call_model = model
+        self.last_call_prompt_tokens = prompt_tokens
+        self.last_call_completion_tokens = completion_tokens
+        self.last_call_reasoning_tokens = reasoning_tokens
+
         if model not in ALL_MODELS:
             logger.warn(f"Unknown model '{model}' for cost tracking, skipping.")
             self.total_prompt_tokens += prompt_tokens
             self.total_completion_tokens += completion_tokens
+            self.total_reasoning_tokens += reasoning_tokens
             return
 
         model_info = ALL_MODELS[model]
 
         self.total_prompt_tokens += prompt_tokens
         self.total_completion_tokens += completion_tokens
+        self.total_reasoning_tokens += reasoning_tokens
         self.total_cost += prompt_tokens * model_info.prompt_token_cost / 1000
         if issubclass(type(model_info), CompletionModelInfo):
             self.total_cost += (

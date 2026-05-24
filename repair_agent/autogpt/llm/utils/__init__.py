@@ -272,6 +272,10 @@ def create_chat_completion(
         logger.error(response.error)
         raise RuntimeError(response.error)
 
+    # Record the request-side cap so the cycle summary can show how close
+    # this call got to its budget (meter_api only sees the response side).
+    ApiManager().set_last_call_cap(chat_completion_kwargs.get("max_completion_tokens"))
+
     first_choice = response.choices[0]
     first_message: ResponseMessageDict = first_choice.message
     content: str | None = first_message.get("content")

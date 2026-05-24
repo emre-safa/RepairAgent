@@ -610,16 +610,34 @@ def display_cycle_header(
 
 
 def _display_cycle_cost_summary() -> None:
-    """Show a dim line with token usage and cost after each command."""
+    """Show a dim line with token usage and cost after each command.
+
+    The cumulative line tracks the whole run so far; the per-call detail (when
+    available) shows how much of the most recent completion budget went to
+    invisible reasoning vs visible output, against the cap that was sent.
+    """
     api_manager = ApiManager()
     prompt_tokens = api_manager.get_total_prompt_tokens()
     completion_tokens = api_manager.get_total_completion_tokens()
     cost = api_manager.get_total_cost()
 
-    logger.console.print(
+    summary = (
         f"  [dim]Tokens: {prompt_tokens:,} prompt + {completion_tokens:,} completion"
-        f" | Cost: ${cost:.4f}[/dim]"
+        f" | Cost: ${cost:.4f}"
     )
+
+    last_completion = api_manager.last_call_completion_tokens
+    last_reasoning = api_manager.last_call_reasoning_tokens
+    last_cap = api_manager.last_call_max_completion_tokens
+    if last_completion or last_reasoning or last_cap:
+        last_visible = max(last_completion - last_reasoning, 0)
+        cap_str = f" / {last_cap:,} cap" if last_cap is not None else ""
+        summary += (
+            f" (this call: {last_reasoning:,} reasoning + {last_visible:,} visible{cap_str})"
+        )
+
+    summary += "[/dim]"
+    logger.console.print(summary)
 
 
 def remove_ansi_escape(s: str) -> str:

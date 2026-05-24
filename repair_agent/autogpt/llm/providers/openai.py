@@ -183,10 +183,20 @@ def meter_api(func: Callable):
         try:
             usage = response.usage
             logger.debug(f"Reported usage from call to model {response.model}: {usage}")
+            # Reasoning models (gpt-5, o1, o3, o4) report invisible thinking
+            # tokens under completion_tokens_details.reasoning_tokens. Older
+            # responses / non-reasoning models omit it.
+            reasoning_tokens = 0
+            details = usage.get("completion_tokens_details") if hasattr(usage, "get") else None
+            if details is not None:
+                reasoning_tokens = (
+                    details.get("reasoning_tokens", 0) if hasattr(details, "get") else 0
+                )
             api_manager.update_cost(
                 response.usage.prompt_tokens,
                 response.usage.completion_tokens if "completion_tokens" in usage else 0,
                 response.model,
+                reasoning_tokens=reasoning_tokens,
             )
         except Exception as err:
             logger.warn(f"Failed to update API costs: {err.__class__.__name__}: {err}")
