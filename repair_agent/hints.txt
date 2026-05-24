@@ -84,3 +84,7 @@ Mutated: double result = x * x; \n processInt((int) result);
 21: Modifies a method signature's arguments to match intended logic. Constraint: ONLY apply this to private methods where all call sites are visible in the provided code, OR ensure you also update every visible call site in the provided snippet to match the new signature.
 Original: private void process(String data)
 Mutated: private void process(String data, int timeout)
+
+22: Wraps a vulnerable expression in a ternary operator (? :) to return a safe fallback value (e.g., null, 0, false, or an empty collection) if a referenced variable is null. Use this specifically for inline null-guards within return statements or variable assignments where a full if block would disrupt the code structure.
+Original: return new LinkedHashMap<>(this.headerMap);
+Mutated: return this.headerMap == null ? null : new LinkedHashMap<>(this.headerMap);

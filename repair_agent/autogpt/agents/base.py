@@ -837,21 +837,22 @@ please use the indicated format and produce a list, like this:
         with open("hints.txt") as htt:
             hints = htt.read()
 
-        context_prompt += "Here are the 21 allowed mutation strategies. You MUST select one of these for every mutant; do NOT invent or use any strategy outside this list:\n" + hints + "\n\n"
+        context_prompt += "Here are the 22 allowed mutation strategies. You MUST select one of these for every mutant; do NOT invent or use any strategy outside this list:\n" + hints + "\n\n"
         context_prompt += detailed_buggies
 
         context_prompt += (
             "Task for assistant: generate 30 mutants of the target buggy lines under the following STRICT rules.\n"
-            "1. Strict Mutation Types: Each mutant MUST correspond to one or more of the 21 mutation strategies listed above. Mutants that do not fit any of the 21 strategies are NOT allowed.\n"
+            "1. Strict Mutation Types: Each mutant MUST correspond to one or more of the 22 mutation strategies listed above. Mutants that do not fit any of the 22 strategies are NOT allowed.\n"
             "2. Mandatory Documentation: For every mutant you MUST include two extra fields alongside the fix dictionary:\n"
-            "   - \"mutation_type\": either a single integer from 1 to 21, or a list of such integers (e.g. [1, 4]) when the mutant combines multiple strategies. Each integer identifies one hint strategy that was applied.\n"
+            "   - \"mutation_type\": either a single integer from 1 to 22, or a list of such integers (e.g. [1, 4]) when the mutant combines multiple strategies. Each integer identifies one hint strategy that was applied.\n"
             "   - \"mutation_comment\": a one-sentence string explaining exactly what was mutated and why it corresponds to those strategies. If multiple strategies are combined, briefly describe every individual change.\n"
-            "3. Explicit Classification: The two fields above must explicitly state which of the 21 mutation types from the hints were applied and briefly describe what the mutant does.\n"
+            "3. Explicit Classification: The two fields above must explicitly state which of the 22 mutation types from the hints were applied and briefly describe what the mutant does.\n"
             "4. Respect the fix format: only change values, never touch keys. For every mutant generate a full fix dictionary (the same keys as the template) plus the two extra fields described above.\n"
             "5. Put the 30 mutants in a single main list.\n"
             "6. Read the surrounding context first: pay close attention to the comments and docstrings located above or next to the buggy lines, especially any critical notes written directly beside or just above the problematic lines. Use these details to precisely mutate the specific problem they describe rather than mutating arbitrary tokens.\n"
             "7. Maximize diversity, no duplicates: do NOT emit two mutants that produce the same code change. Before moving on from a token, exhaust its obvious alternatives. For example, if the code contains '<', generate mutants that replace it with '>', '<=', '>=', '==' and '!=' rather than only one of them; if it contains 'i++', try 'i--', '++i' and '--i'. The wider the variety across the 30 mutants, the better.\n"
-            "8. Combined mutations once singles are exhausted: after producing every meaningful single-strategy mutation for the buggy line(s), you may (and should) apply multiple mutations in a single mutant. The combined mutations can be of the same or of different strategies. In that case, set \"mutation_type\" to the list of every strategy id applied, and describe each individual change inside \"mutation_comment\".\n\n"
+            "8. Combined mutations once singles are exhausted: after producing every meaningful single-strategy mutation for the buggy line(s), you may (and should) apply multiple mutations in a single mutant. The combined mutations can be of the same or of different strategies. In that case, set \"mutation_type\" to the list of every strategy id applied, and describe each individual change inside \"mutation_comment\".\n"
+            "9. Handling FAULT_OF_OMISSION & Dataset Markers: Markers like FAULT_OF_OMISSION are artificial pointers indicating that code is missing at this exact location; they are NOT real Java syntax. You are strictly forbidden from \"mutating\" these marker strings (i.e., do not apply Strategies 1-17 to them, and do not put them in the modifications array). When encountering an omission marker, you MUST execute the fix in two steps: (a) use the deletions array to completely remove the line containing the marker, and (b) use the insertions array to inject the missing logic at or adjacent to that line number. The missing logic will almost always correspond to Strategy 18 (missing statements), Strategy 19 (missing guard blocks), or Strategy 22 (missing null-checks); set \"mutation_type\" accordingly (single id or list when combined).\n\n"
         )
 
         context_prompt += (
@@ -894,7 +895,7 @@ please use the indicated format and produce a list, like this:
 
         context_prompt += (
             "To generate the list of your mutations, fill out the following template multiple times with different variants. "
-            "Remember: every entry MUST include the two extra fields mutation_type (1-21) and mutation_comment.\n"
+            "Remember: every entry MUST include the two extra fields mutation_type (1-22) and mutation_comment.\n"
         )
         context_prompt += fix_template + "\n"
         return context_prompt
