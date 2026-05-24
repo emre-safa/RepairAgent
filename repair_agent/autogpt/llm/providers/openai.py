@@ -82,6 +82,27 @@ OPEN_AI_CHAT_MODELS = {
             max_tokens=16384,
             supports_functions=True,
         ),
+        ChatModelInfo(
+            name="gpt-5-2025-08-07",
+            prompt_token_cost=0.00125,  # $1.25/M
+            completion_token_cost=0.010,  # $10/M
+            max_tokens=400000,
+            supports_functions=True,
+        ),
+        ChatModelInfo(
+            name="gpt-5-mini-2025-08-07",
+            prompt_token_cost=0.00025,  # $0.25/M
+            completion_token_cost=0.002,  # $2/M
+            max_tokens=400000,
+            supports_functions=True,
+        ),
+        ChatModelInfo(
+            name="gpt-5-nano-2025-08-07",
+            prompt_token_cost=0.00005,  # $0.05/M
+            completion_token_cost=0.0004,  # $0.40/M
+            max_tokens=400000,
+            supports_functions=True,
+        ),
     ]
 }
 
@@ -95,6 +116,9 @@ chat_model_mapping = {
     "gpt-4.1-nano": "gpt-4.1-nano-2025-04-14",
     "gpt-4o": "gpt-4o-2024-08-06",
     "gpt-4o-mini": "gpt-4o-mini-2024-07-18",
+    "gpt-5": "gpt-5-2025-08-07",
+    "gpt-5-mini": "gpt-5-mini-2025-08-07",
+    "gpt-5-nano": "gpt-5-nano-2025-08-07",
 }
 
 for alias, target in chat_model_mapping.items():

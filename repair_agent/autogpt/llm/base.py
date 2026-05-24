@@ -204,3 +204,30 @@ class ChatModelResponse(LLMResponse):
 
     content: Optional[str]
     function_call: Optional[OpenAIFunctionCall]
+    finish_reason: Optional[str] = None
+
+
+class TokenBudgetExhaustedError(RuntimeError):
+    """Raised when a reasoning model spent the full completion budget on internal
+    reasoning and produced no visible text (finish_reason="length" + empty content).
+    Carries enough metadata for callers to retry with a larger budget or lower
+    reasoning_effort.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        max_completion_tokens: Optional[int],
+        completion_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+    ):
+        self.model = model
+        self.max_completion_tokens = max_completion_tokens
+        self.completion_tokens = completion_tokens
+        self.reasoning_effort = reasoning_effort
+        super().__init__(
+            f"Model {model} exhausted its {max_completion_tokens}-token completion "
+            f"budget on internal reasoning (consumed {completion_tokens}, "
+            f"reasoning_effort={reasoning_effort}) without producing any visible text. "
+            f"Raise max_completion_tokens or lower reasoning_effort."
+        )

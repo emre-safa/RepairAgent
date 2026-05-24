@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
     from autogpt.models.command_registry import CommandRegistry
 
-from autogpt.llm.base import ChatModelResponse, ChatSequence, Message
+from autogpt.llm.base import ChatModelResponse, ChatSequence, Message, TokenBudgetExhaustedError
 from autogpt.llm.providers.openai import ALL_CHAT_MODELS, get_openai_command_specs
 from autogpt.llm.utils import count_message_tokens, create_chat_completion
 from autogpt.logs import logger
@@ -983,14 +983,30 @@ please use the indicated format and produce a list, like this:
                 suggested_fixes = query_for_fix(query, self.config.static_llm)
                 self.save_to_json(os.path.join("experimental_setups", self.experiment_dir, "external_fixes", "external_fixes_{}_{}.json".format(project_name, bug_index)), json.loads(suggested_fixes))
 
-        raw_response = create_chat_completion(
-            prompt,
-            self.config,
-            functions=get_openai_command_specs(self.command_registry)
-            if self.config.openai_functions
-            else None,
-        )
-        
+        try:
+            raw_response = create_chat_completion(
+                prompt,
+                self.config,
+                functions=get_openai_command_specs(self.command_registry)
+                if self.config.openai_functions
+                else None,
+            )
+        except TokenBudgetExhaustedError as e:
+            # Reasoning model burned its full output budget on internal thinking
+            # and returned no visible text. Log clearly and skip the cycle with
+            # a system reminder so the next cycle has context.
+            logger.error(f"TOKEN BUDGET EXHAUSTED: {e}")
+            self.history.append(prompt[-1])
+            self.history.add(
+                "system",
+                f"Previous cycle produced no output: the reasoning model "
+                f"({e.model}) used its full {e.max_completion_tokens}-token "
+                f"completion budget on internal reasoning. "
+                f"Be more concise or skip exploratory thinking.",
+            )
+            self.cycle_count += 1
+            return None, None, {}
+
         try:
             response_dict = extract_dict_from_response(
                 raw_response.content
@@ -1000,13 +1016,20 @@ please use the indicated format and produce a list, like this:
                 logger.info("WARNING: REPETITION DETECTED!\n")
                 logger.info(str(self.handle_command_repetition(response_dict, self.hyperparams["repetition_handling"])) + "\n\n")
                 prompt.extend([Message("user", self.handle_command_repetition(response_dict, self.hyperparams["repetition_handling"]))])
-                new_response = create_chat_completion(
-                        prompt,
-                        self.config,
-                        functions=get_openai_command_specs(self.command_registry)
-                        if self.config.openai_functions
-                        else None,
-                    )
+                try:
+                    new_response = create_chat_completion(
+                            prompt,
+                            self.config,
+                            functions=get_openai_command_specs(self.command_registry)
+                            if self.config.openai_functions
+                            else None,
+                        )
+                except TokenBudgetExhaustedError as e:
+                    # Repetition-handling retry exhausted its budget too. Fall
+                    # back to the original (repetitive) response rather than
+                    # crashing — better to repeat a command than skip the cycle.
+                    logger.error(f"TOKEN BUDGET EXHAUSTED on repetition retry: {e}")
+                    new_response = raw_response
                 if self.hyperparams["repetition_handling"] == "TOP3":
                     top3_list = json.loads(new_response.content)
                     for r in top3_list:
@@ -1083,7 +1106,7 @@ please use the indicated format and produce a list, like this:
             cycle_instruction += "\nYou have, so far, executed {} commands, you have only {} commands left.\n".format(self.cycle_count, self.hyperparams["commands_limit"]-self.cycle_count)
         elif self.hyperparams["budget_control"]["name"] == "FULL-TRACK" and self.hyperparams["budget_control"]["params"]!={}:
             n_fixes = self.hyperparams["budget_control"]["params"]["#fixes"]
-            cycle_instruction += "\nYou have, so far, executed, {} commands and suggested {} fixes. You have {} commands left. However, you need to suggest {} fixes before consuming all the left commands.\n".format(self.cycle_count, len(self.suggested_fixes), self.hyperparams["commands_limit"]-self.cycle_count, n_fixes - len(self.suggested_fixes))
+            cycle_instruction += "\nYou have, so far, executed {} commands and suggested {} fixes. You have {} commands left. However, you need to suggest {} fixes before consuming all the left commands.\n".format(self.cycle_count, len(self.suggested_fixes), self.hyperparams["commands_limit"]-self.cycle_count, n_fixes - len(self.suggested_fixes))
         elif self.hyperparams["budget_control"]["name"]=="FORCED":
             t1 = self.hyperparams["budget_control"]["T1"]
             t2 = self.hyperparams["budget_control"]["T2"]

@@ -58,6 +58,9 @@ class Config(SystemSettings, arbitrary_types_allowed=True):
     smart_llm: str = "gpt-5-mini"
     static_llm: str = "gpt-4o-mini"
     temperature: float = 0
+    # Applied to reasoning models (o1/o3/o4/gpt-5) only. "minimal" | "low" |
+    # "medium" | "high". Lower values = fewer reasoning tokens spent per cycle.
+    reasoning_effort: str = "medium"
     openai_functions: bool = False
     embedding_model: str = "text-embedding-ada-002"
     browse_spacy_language_model: str = "en_core_web_sm"
@@ -242,6 +245,7 @@ class ConfigBuilder(Configurable[Config]):
             "fast_llm": os.getenv("FAST_LLM", os.getenv("FAST_LLM_MODEL")),
             "smart_llm": os.getenv("SMART_LLM", os.getenv("SMART_LLM_MODEL")),
             "static_llm": os.getenv("STATIC_LLM"),
+            "reasoning_effort": os.getenv("REASONING_EFFORT"),
             "embedding_model": os.getenv("EMBEDDING_MODEL"),
             "browse_spacy_language_model": os.getenv("BROWSE_SPACY_LANGUAGE_MODEL"),
             "openai_api_key": os.getenv("OPENAI_API_KEY"),

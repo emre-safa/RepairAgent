@@ -14,6 +14,7 @@ from ..base import (
     FunctionCallDict,
     Message,
     ResponseMessageDict,
+    TokenBudgetExhaustedError,
 )
 from ..providers import openai as iopenai
 from ..providers import anthropic as ianthropic
@@ -36,6 +37,17 @@ _REASONING_MODEL_PREFIXES: tuple[str, ...] = ("o1", "o3", "o4", "gpt-5")
 # Reasoning models that also reject response_format={"type":"json_object"}.
 # Discovered at runtime via a retry; gpt-5 series supports it, o1 series does not.
 _NO_RESPONSE_FORMAT_MODELS: set[str] = set()
+
+# Reasoning models also reject the `reasoning_effort` kwarg on some endpoints
+# (e.g. older o1 deployments). Discovered at runtime via a retry.
+_NO_REASONING_EFFORT_MODELS: set[str] = set()
+
+# Completion-token caps. Reasoning models need a much larger ceiling because
+# the budget covers invisible reasoning in addition to visible output — at 4k
+# the model frequently exhausts the budget thinking and returns empty content
+# with finish_reason="length".
+_NONREASONING_MAX_OUTPUT = 4000
+_REASONING_MAX_OUTPUT = 16000
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -144,8 +156,12 @@ def create_chat_completion(
     if max_tokens is None:
         prompt_tlength = prompt.token_length
         model_max = ALL_CHAT_MODELS[model].max_tokens if model in ALL_CHAT_MODELS else 128000
+        # Reasoning models need a larger output budget because the cap covers
+        # invisible reasoning tokens; non-reasoning models keep the historical
+        # 4k ceiling.
+        output_cap = _REASONING_MAX_OUTPUT if _is_reasoning_model(model) else _NONREASONING_MAX_OUTPUT
         max_tokens = (
-            min(model_max - prompt_tlength - 1, 4000)
+            min(model_max - prompt_tlength - 1, output_cap)
         )  # the -1 is just here because we have a bug and we don't know how to fix it. When using gpt-4-0314 we get a token error.
         logger.debug(f"Prompt length: {prompt_tlength} tokens")
         if functions and not is_anthropic_model(model):
@@ -207,6 +223,9 @@ def create_chat_completion(
             # is discovered via the retry below on first failure.
             chat_completion_kwargs["max_completion_tokens"] = chat_completion_kwargs.pop("max_tokens")
             chat_completion_kwargs.pop("temperature", None)
+            reasoning_effort = getattr(config, "reasoning_effort", None)
+            if reasoning_effort and model not in _NO_REASONING_EFFORT_MODELS:
+                chat_completion_kwargs["reasoning_effort"] = reasoning_effort
 
         try:
             response = iopenai.create_chat_completion(
@@ -233,6 +252,13 @@ def create_chat_completion(
                 )
                 chat_completion_kwargs.pop("response_format", None)
                 retried = True
+            if "reasoning_effort" in err:
+                _NO_REASONING_EFFORT_MODELS.add(model)
+                logger.debug(
+                    f"Model {model} rejects reasoning_effort; caching and retrying."
+                )
+                chat_completion_kwargs.pop("reasoning_effort", None)
+                retried = True
             if not retried:
                 raise
             response = iopenai.create_chat_completion(
@@ -246,9 +272,25 @@ def create_chat_completion(
         logger.error(response.error)
         raise RuntimeError(response.error)
 
-    first_message: ResponseMessageDict = response.choices[0].message
+    first_choice = response.choices[0]
+    first_message: ResponseMessageDict = first_choice.message
     content: str | None = first_message.get("content")
     function_call: FunctionCallDict | None = first_message.get("function_call")
+    finish_reason: str | None = first_choice.get("finish_reason")
+
+    # Reasoning model spent its full completion budget on invisible reasoning
+    # and produced no visible text. Surface a typed error so the caller can
+    # retry with a bigger budget / lower reasoning_effort instead of treating
+    # this as a generic syntax error downstream.
+    if _is_reasoning_model(model) and finish_reason == "length" and not content and not function_call:
+        usage = getattr(response, "usage", None)
+        completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        raise TokenBudgetExhaustedError(
+            model=model,
+            max_completion_tokens=chat_completion_kwargs.get("max_completion_tokens"),
+            completion_tokens=completion_tokens,
+            reasoning_effort=chat_completion_kwargs.get("reasoning_effort"),
+        )
 
     for plugin in config.plugins:
         if not plugin.can_handle_on_response():
@@ -274,4 +316,5 @@ def create_chat_completion(
         )
         if function_call
         else None,
+        finish_reason=finish_reason,
     )
