@@ -5,6 +5,7 @@ import json_repair
 import re
 import time
 import os
+import copy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -30,6 +31,98 @@ from autogpt.workspace import Workspace
 from autogpt.commands.defects4j_static import query_for_mutants, construct_fix_command, get_detailed_list_of_buggy_lines
 
 from .base import AgentThoughts, BaseAgent, CommandArgs, CommandName
+
+
+def _coerce_change_list(value):
+    """Normalize a patch/seed into a list of change-dicts."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return []
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [c for c in value if isinstance(c, dict)]
+    return []
+
+
+def merge_delta_into_seed(seed_patch, delta):
+    """Merge a mutation *delta* onto a deep copy of the seed patch.
+
+    In "delta mode" the mutator returns only the edits it changes or adds relative to
+    the seed, instead of restating the whole patch. This merges that delta back onto
+    the seed so the result is a complete, applicable fix. Merge rules, matched by
+    ``line_number`` against the change-dict for the delta's file:
+      - a modification at an existing line_number overrides that ``modified_line``;
+      - an insertion at an existing line_number overrides that insertion's ``new_lines``;
+      - any edit at a new line_number is appended;
+      - deletions are unioned.
+    ``mutation_type`` / ``mutation_comment`` from the delta are carried onto the
+    targeted change-dict for observability. Returns a single change-dict when the fix
+    targets one file (matching the historical single-dict mutant shape), otherwise the
+    list of change-dicts. If the delta is not a dict it is returned unchanged.
+    """
+    if not isinstance(delta, dict):
+        return delta
+
+    seed_dicts = [copy.deepcopy(cd) for cd in _coerce_change_list(seed_patch)]
+
+    # Pick the seed change-dict to merge into.
+    delta_file = delta.get("file_name")
+    target = None
+    if delta_file is not None:
+        for cd in seed_dicts:
+            if cd.get("file_name") == delta_file:
+                target = cd
+                break
+    if target is None and len(seed_dicts) == 1:
+        target = seed_dicts[0]
+    if target is None:
+        # No matching file in the seed (e.g. multi-file seed): treat the delta as a
+        # standalone change-dict so its edits still get applied.
+        target = {"file_name": delta_file or "", "insertions": [], "deletions": [], "modifications": []}
+        seed_dicts.append(target)
+
+    target.setdefault("insertions", [])
+    target.setdefault("deletions", [])
+    target.setdefault("modifications", [])
+
+    # Modifications: override by line_number, else append.
+    for mod in delta.get("modifications", []) or []:
+        if not isinstance(mod, dict) or "line_number" not in mod:
+            continue
+        for existing in target["modifications"]:
+            if existing.get("line_number") == mod.get("line_number"):
+                existing["modified_line"] = mod.get("modified_line", existing.get("modified_line"))
+                break
+        else:
+            target["modifications"].append(mod)
+
+    # Insertions: override new_lines by line_number, else append.
+    for ins in delta.get("insertions", []) or []:
+        if not isinstance(ins, dict) or "line_number" not in ins:
+            continue
+        for existing in target["insertions"]:
+            if existing.get("line_number") == ins.get("line_number"):
+                if "new_lines" in ins:
+                    existing["new_lines"] = ins["new_lines"]
+                break
+        else:
+            target["insertions"].append(ins)
+
+    # Deletions: union.
+    for d in delta.get("deletions", []) or []:
+        if d not in target["deletions"]:
+            target["deletions"].append(d)
+
+    # Carry mutation metadata onto the targeted change-dict for observability.
+    if "mutation_type" in delta:
+        target["mutation_type"] = delta["mutation_type"]
+    if "mutation_comment" in delta:
+        target["mutation_comment"] = delta["mutation_comment"]
+
+    return seed_dicts[0] if len(seed_dicts) == 1 else seed_dicts
 
 
 class Agent(BaseAgent):
@@ -280,9 +373,23 @@ class Agent(BaseAgent):
                     logger.info(f"No fix was suggested: {e}")
                 # getting the list of buggy lines
                 detailed_buggies = get_detailed_list_of_buggy_lines(self.project_name, self.bug_index)
-                
+
+                # Seed the mutator from the immediately preceding write_fix patch.
+                # `self.last_write_fix_patch` holds the patch suggested by the previous
+                # write_fix call (None on the very first call, so the mutator falls back
+                # to the buggy lines). Read it BEFORE recording the current patch, so the
+                # current fix only seeds the NEXT mutator call, never this one.
+                seed_patch = self.last_write_fix_patch
+                if fix_content and str(fix_content).strip() not in ("", "[]", "{}", "No fix suggested yet."):
+                    self.last_write_fix_patch = fix_content
+
+                # In delta mode (a seed is available) the mutator returns small deltas to
+                # be merged onto the seed; otherwise it returns full mutants. This guard
+                # must mirror the one in construct_mutation_prompt.
+                delta_mode = bool(seed_patch and str(seed_patch).strip() not in ("", "[]", "{}", "None"))
+
                 # create mutation prompt
-                mutant_prompt = self.construct_mutation_prompt(fix_content, detailed_buggies)
+                mutant_prompt = self.construct_mutation_prompt(seed_patch, detailed_buggies)
                 # save mutation prompt
                 with open(os.path.join("experimental_setups", self.experiment_dir, "mutations_history", "mutations_prompt_{}_{}".format(self.project_name, self.bug_index)), "a") as mph:
                     mph.write(mutant_prompt)
@@ -312,6 +419,19 @@ class Agent(BaseAgent):
                             mutants_json.append(parsed)
                         elif isinstance(parsed, list):
                             mutants_json.extend(parsed)
+
+                    # In delta mode, merge each delta onto the seed to obtain full,
+                    # applicable mutants before saving/executing. This keeps the saved
+                    # records, dedup and execution path identical across both modes.
+                    if delta_mode:
+                        merged_mutants = []
+                        for d in mutants_json:
+                            try:
+                                merged_mutants.append(merge_delta_into_seed(seed_patch, d))
+                            except Exception as e:
+                                logger.warn(f"Failed to merge mutant delta onto seed: {e}")
+                        mutants_json = merged_mutants
+                        logger.info(f"Merged {len(mutants_json)} mutant deltas onto the seed patch")
 
                     self.save_to_json(mutants_save_path, mutants_json)
                     logger.info(f"Generated {len(mutants_json)} mutants")

@@ -199,6 +199,12 @@ class BaseAgent(metaclass=ABCMeta):
         self.generated_methods = None
         self.dummy_fix = False
 
+        # Seed patch for the mutation generator: holds the changes_dicts of the most
+        # recent write_fix call so the NEXT mutator call can start mutating from it.
+        # Stays None until the first write_fix, so the first mutator call falls back to
+        # mutating the original buggy lines.
+        self.last_write_fix_patch = None
+
         # Fallback: when no --experiment-dir is passed (e.g. when autogpt is
         # invoked directly without the run_on_defects4j.sh wrapper), default to
         # the last entry of experiments_list.txt, preserving the legacy path.
@@ -224,6 +230,7 @@ class BaseAgent(metaclass=ABCMeta):
             "test_results": self.tests_results,
             "read_files": self.read_files,
             "suggested_fixes": self.suggested_fixes,
+            "last_write_fix_patch": self.last_write_fix_patch,
             "search_queries": self.search_queries,
             "bug_report": self.bug_report,
             "commands_history": self.commands_history,
@@ -316,6 +323,7 @@ please use the indicated format and produce a list, like this:
         self.tests_results = context["test_results"]
         self.read_files = context["read_files"]
         self.suggested_fixes = context["suggested_fixes"]
+        self.last_write_fix_patch = context.get("last_write_fix_patch", None)
         self.search_queries = context["search_queries"]
         self.bug_report = context["bug_report"]
         self.commands_history = context["commands_history"]
@@ -800,6 +808,13 @@ please use the indicated format and produce a list, like this:
         return context_prompt
 
     def construct_mutation_prompt(self, last_patch, detailed_buggies):
+        """Build the prompt sent to the mutation-generator LLM.
+
+        `last_patch` is the patch suggested by the immediately preceding write_fix
+        call (see `self.last_write_fix_patch`). When it is present, the mutator is
+        instructed to start mutating from that patch; when it is None/empty (the very
+        first mutator call of the run) the mutator falls back to the buggy lines.
+        """
         hypothesis_string = self.construct_hypothesises_context()
         read_files_section = self.construct_read_files_context()
         suggested_fixes_section = self.construct_fixes_context()
@@ -833,71 +848,169 @@ please use the indicated format and produce a list, like this:
 
         context_prompt += "\n".join(info_sections)
         context_prompt += "\n" + "\n".join(self.prompt_dictionary["fix format"])
-        #context_prompt += "\n" + "For reference, here is a patch that you can start mutating from (if not available create your own):\n" + str(last_patch) +"\n\n"
         with open("hints.txt") as htt:
             hints = htt.read()
 
         context_prompt += "Here are the 22 allowed mutation strategies. You MUST select one of these for every mutant; do NOT invent or use any strategy outside this list:\n" + hints + "\n\n"
         context_prompt += detailed_buggies
 
+        # Seed the mutation process from the immediately preceding write_fix patch
+        # (`last_patch`). When a seed is available we run in "delta mode": the mutator
+        # returns only the small change it makes to the seed (which agent.py merges back
+        # onto the seed), so a long patch is never restated 30 times. On the very first
+        # mutator call there is no preceding fix, so we keep the original behaviour of
+        # mutating the buggy lines and asking for full fix dictionaries.
+        delta_mode = bool(last_patch and str(last_patch).strip() not in ("", "[]", "{}", "None"))
+
+        # Illustrative seed + delta mutants (built as real dicts so the embedded JSON is
+        # always valid). In delta mode each mutant carries ONLY the edit it changes/adds.
+        example_seed = {
+            "file_name": "org/apache/commons/compress/archivers/tar/TarUtils.java",
+            "insertions": [],
+            "deletions": [],
+            "modifications": [
+                {"line_number": 133, "modified_line": "        if (start > end) {"},
+                {"line_number": 134, "modified_line": "            throw new IllegalArgumentException("},
+                {"line_number": 135, "modified_line": "                    exceptionMessage(buffer, offset, length, start, trailer));"},
+                {"line_number": 136, "modified_line": "        }"},
+            ],
+        }
+        example_delta_mutants = [
+            {
+                "file_name": "org/apache/commons/compress/archivers/tar/TarUtils.java",
+                "insertions": [],
+                "deletions": [],
+                "modifications": [{"line_number": 133, "modified_line": "        if (start >= end) {"}],
+                "mutation_type": 1,
+                "mutation_comment": "Changed only the relational operator '>' to '>=' on line 133 (strategy 1); the rest of the fix is left untouched.",
+            },
+            {
+                "file_name": "org/apache/commons/compress/archivers/tar/TarUtils.java",
+                "insertions": [],
+                "deletions": [],
+                "modifications": [{"line_number": 133, "modified_line": "        if (start != end) {"}],
+                "mutation_type": 1,
+                "mutation_comment": "Changed only the relational operator '>' to '!=' on line 133 (strategy 1); the rest of the fix is left untouched.",
+            },
+        ]
+        example_delta_insertion = {
+            "file_name": "org/apache/commons/compress/archivers/tar/TarUtils.java",
+            "insertions": [{"line_number": 133, "new_lines": ["        if (length == 0) {", "            return 0L;", "        }"]}],
+            "deletions": [],
+            "modifications": [],
+            "mutation_type": 19,
+            "mutation_comment": "Added a new guard block before line 133 as an extra edit (strategy 19); all of the fix's existing edits are kept by the merge.",
+        }
+
+        if delta_mode:
+            try:
+                seed_render = json.dumps(last_patch, indent=2)
+            except (TypeError, ValueError):
+                seed_render = str(last_patch)
+            context_prompt += (
+                "\nIMPORTANT - You are mutating an existing fix (do NOT restate it):\n"
+                "Below is the most recently suggested fix for the buggy lines listed above. Treat it as a "
+                "near-miss and mutate it. It is expressed as edits (insertions / modifications / deletions) on "
+                "the original buggy file, and every line_number it uses refers to that original buggy file.\n"
+                "For each mutant, output ONLY the small change you make to this fix - the single edit (or few "
+                "edits) you alter or add - using the same line numbers as the fix. Do NOT repeat the fix's "
+                "unchanged edits: the system merges your change onto the fix automatically. An edit you give at "
+                "a line_number the fix already edits replaces that edit; an edit at a new line_number is added. "
+                "Each modified line you output should stay a close, token-level variant of the original buggy "
+                "line at that number.\n"
+                "Fix you are mutating:\n" + seed_render + "\n\n"
+                "Worked example - if the fix you are mutating is:\n" + json.dumps(example_seed, indent=2) + "\n"
+                "then two correct mutants are the following (note that ONLY the changed line 133 is output; "
+                "lines 134, 135 and 136 are NOT repeated because they are unchanged):\n"
+                + json.dumps(example_delta_mutants, indent=2) + "\n\n"
+            )
+        else:
+            context_prompt += (
+                "\nNo previously suggested fix is available yet, so generate your mutations starting from "
+                "the original buggy lines listed above.\n\n"
+            )
+
         context_prompt += (
-            "Task for assistant: generate 30 mutants of the target buggy lines under the following STRICT rules.\n"
+            "Task for assistant: generate 40 mutants of the target buggy lines under the following STRICT rules.\n"
             "1. Strict Mutation Types: Each mutant MUST correspond to one or more of the 22 mutation strategies listed above. Mutants that do not fit any of the 22 strategies are NOT allowed.\n"
             "2. Mandatory Documentation: For every mutant you MUST include two extra fields alongside the fix dictionary:\n"
             "   - \"mutation_type\": either a single integer from 1 to 22, or a list of such integers (e.g. [1, 4]) when the mutant combines multiple strategies. Each integer identifies one hint strategy that was applied.\n"
             "   - \"mutation_comment\": a one-sentence string explaining exactly what was mutated and why it corresponds to those strategies. If multiple strategies are combined, briefly describe every individual change.\n"
             "3. Explicit Classification: The two fields above must explicitly state which of the 22 mutation types from the hints were applied and briefly describe what the mutant does.\n"
-            "4. Respect the fix format: only change values, never touch keys. For every mutant generate a full fix dictionary (the same keys as the template) plus the two extra fields described above.\n"
-            "5. Put the 30 mutants in a single main list.\n"
+        )
+        if delta_mode:
+            context_prompt += (
+                "4. Output ONLY your change as a partial fix - NEVER the whole fix. For each mutant, give the "
+                "file_name and only the edits you change or add (the relevant modification(s), insertion(s) or "
+                "deletion(s)); leave the other edit lists empty. Do NOT repeat the fix's unchanged edits - they "
+                "are merged in automatically. Keep the same keys and line numbers as the fix format; only values change.\n"
+            )
+        else:
+            context_prompt += (
+                "4. Respect the fix format: only change values, never touch keys. For every mutant generate a full fix dictionary (the same keys as the template) plus the two extra fields described above.\n"
+            )
+        context_prompt += (
+            "5. Put the 40 mutants in a single main list.\n"
             "6. Read the surrounding context first: pay close attention to the comments and docstrings located above or next to the buggy lines, especially any critical notes written directly beside or just above the problematic lines. Use these details to precisely mutate the specific problem they describe rather than mutating arbitrary tokens.\n"
-            "7. Maximize diversity, no duplicates: do NOT emit two mutants that produce the same code change. Before moving on from a token, exhaust its obvious alternatives. For example, if the code contains '<', generate mutants that replace it with '>', '<=', '>=', '==' and '!=' rather than only one of them; if it contains 'i++', try 'i--', '++i' and '--i'. The wider the variety across the 30 mutants, the better.\n"
+            "7. Maximize diversity, no duplicates: do NOT emit two mutants that produce the same code change. Before moving on from a token, exhaust its obvious alternatives. For example, if the code contains '<', generate mutants that replace it with '>', '<=', '>=', '==' and '!=' rather than only one of them; if it contains 'i++', try 'i--', '++i' and '--i'. The wider the variety across the 40 mutants, the better.\n"
             "8. Combined mutations once singles are exhausted: after producing every meaningful single-strategy mutation for the buggy line(s), you may (and should) apply multiple mutations in a single mutant. The combined mutations can be of the same or of different strategies. In that case, set \"mutation_type\" to the list of every strategy id applied, and describe each individual change inside \"mutation_comment\".\n"
             "9. Handling FAULT_OF_OMISSION & Dataset Markers: Markers like FAULT_OF_OMISSION are artificial pointers indicating that code is missing at this exact location; they are NOT real Java syntax. You are strictly forbidden from \"mutating\" these marker strings (i.e., do not apply Strategies 1-17 to them, and do not put them in the modifications array). When encountering an omission marker, you MUST execute the fix in two steps: (a) use the deletions array to completely remove the line containing the marker, and (b) use the insertions array to inject the missing logic at or adjacent to that line number. The missing logic will almost always correspond to Strategy 18 (missing statements), Strategy 19 (missing guard blocks), or Strategy 22 (missing null-checks); set \"mutation_type\" accordingly (single id or list when combined).\n\n"
         )
 
-        context_prompt += (
-            "Examples of the expected output structure (each list element is a fix dictionary augmented with mutation_type and mutation_comment):\n"
-            "[\n"
-            "  {\n"
-            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
-            "    \"insertions\": [],\n"
-            "    \"deletions\": [],\n"
-            "    \"modifications\": [{\"line_number\": 225, \"modified_line\": \"        if (a <= b) {\"}],\n"
-            "    \"mutation_type\": 1,\n"
-            "    \"mutation_comment\": \"Replaced the relational operator '<' with '<=' on line 225 to test a boundary shift (strategy 1).\"\n"
-            "  },\n"
-            "  {\n"
-            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
-            "    \"insertions\": [],\n"
-            "    \"deletions\": [],\n"
-            "    \"modifications\": [{\"line_number\": 230, \"modified_line\": \"        int total = a * b;\"}],\n"
-            "    \"mutation_type\": 2,\n"
-            "    \"mutation_comment\": \"Swapped the arithmetic operator '+' for '*' to verify the correct mathematical operation (strategy 2).\"\n"
-            "  },\n"
-            "  {\n"
-            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
-            "    \"insertions\": [{\"line_number\": 241, \"inserted_line\": \"        if (entity != null) {\"}, {\"line_number\": 243, \"inserted_line\": \"        }\"}],\n"
-            "    \"deletions\": [],\n"
-            "    \"modifications\": [],\n"
-            "    \"mutation_type\": 19,\n"
-            "    \"mutation_comment\": \"Wrapped the call to entity.create() in a null check to guard against a NullPointerException (strategy 19).\"\n"
-            "  },\n"
-            "  {\n"
-            "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
-            "    \"insertions\": [{\"line_number\": 241, \"inserted_line\": \"        if (entity != null) {\"}, {\"line_number\": 243, \"inserted_line\": \"        }\"}],\n"
-            "    \"deletions\": [],\n"
-            "    \"modifications\": [{\"line_number\": 225, \"modified_line\": \"        if (a >= b) {\"}],\n"
-            "    \"mutation_type\": [1, 19],\n"
-            "    \"mutation_comment\": \"Combined two strategies: flipped the relational operator '<' to '>=' on line 225 (strategy 1) and wrapped the entity.create() call in a null check on lines 241-243 (strategy 19).\"\n"
-            "  }\n"
-            "]\n\n"
-        )
+        if delta_mode:
+            context_prompt += (
+                "One more example - a mutant that ADDS a new edit (here an insertion) instead of changing an "
+                "existing one. Only the new edit is output; the fix's other edits are kept by the merge:\n"
+                + json.dumps([example_delta_insertion], indent=2) + "\n\n"
+                "To generate your list, output 40 such partial-change objects in a single JSON list. Each object "
+                "must contain file_name and any of insertions / modifications / deletions holding ONLY your "
+                "changed or added edits (leave the rest empty), plus mutation_type and mutation_comment. "
+                "Insertions use the key new_lines (a list of code lines). Do NOT output the fix's unchanged edits.\n"
+            )
+        else:
+            context_prompt += (
+                "Examples of the expected output structure (each list element is a fix dictionary augmented with mutation_type and mutation_comment):\n"
+                "[\n"
+                "  {\n"
+                "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+                "    \"insertions\": [],\n"
+                "    \"deletions\": [],\n"
+                "    \"modifications\": [{\"line_number\": 225, \"modified_line\": \"        if (a <= b) {\"}],\n"
+                "    \"mutation_type\": 1,\n"
+                "    \"mutation_comment\": \"Replaced the relational operator '<' with '<=' on line 225 to test a boundary shift (strategy 1).\"\n"
+                "  },\n"
+                "  {\n"
+                "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+                "    \"insertions\": [],\n"
+                "    \"deletions\": [],\n"
+                "    \"modifications\": [{\"line_number\": 230, \"modified_line\": \"        int total = a * b;\"}],\n"
+                "    \"mutation_type\": 2,\n"
+                "    \"mutation_comment\": \"Swapped the arithmetic operator '+' for '*' to verify the correct mathematical operation (strategy 2).\"\n"
+                "  },\n"
+                "  {\n"
+                "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+                "    \"insertions\": [{\"line_number\": 241, \"inserted_line\": \"        if (entity != null) {\"}, {\"line_number\": 243, \"inserted_line\": \"        }\"}],\n"
+                "    \"deletions\": [],\n"
+                "    \"modifications\": [],\n"
+                "    \"mutation_type\": 19,\n"
+                "    \"mutation_comment\": \"Wrapped the call to entity.create() in a null check to guard against a NullPointerException (strategy 19).\"\n"
+                "  },\n"
+                "  {\n"
+                "    \"file_name\": \"org/apache/commons/codec/binary/Base64.java\",\n"
+                "    \"insertions\": [{\"line_number\": 241, \"inserted_line\": \"        if (entity != null) {\"}, {\"line_number\": 243, \"inserted_line\": \"        }\"}],\n"
+                "    \"deletions\": [],\n"
+                "    \"modifications\": [{\"line_number\": 225, \"modified_line\": \"        if (a >= b) {\"}],\n"
+                "    \"mutation_type\": [1, 19],\n"
+                "    \"mutation_comment\": \"Combined two strategies: flipped the relational operator '<' to '>=' on line 225 (strategy 1) and wrapped the entity.create() call in a null check on lines 241-243 (strategy 19).\"\n"
+                "  }\n"
+                "]\n\n"
+            )
 
-        context_prompt += (
-            "To generate the list of your mutations, fill out the following template multiple times with different variants. "
-            "Remember: every entry MUST include the two extra fields mutation_type (1-22) and mutation_comment.\n"
-        )
-        context_prompt += fix_template + "\n"
+            context_prompt += (
+                "To generate the list of your mutations, fill out the following template multiple times with different variants. "
+                "Remember: every entry MUST include the two extra fields mutation_type (1-22) and mutation_comment.\n"
+            )
+            context_prompt += fix_template + "\n"
         return context_prompt
 
     def save_to_json(self, path, json_content, mode="a"):
