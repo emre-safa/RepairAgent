@@ -18,6 +18,10 @@ class ApiManager(metaclass=Singleton):
         self.total_cost = 0
         self.total_budget = 0
         self.models: Optional[list[Model]] = None
+        # Per-model breakdown so different models (e.g. a reasoning smart_llm vs
+        # a non-reasoning static_llm, each with its own pricing) can be reported
+        # separately after a run. Keyed by model name -> running token/cost dict.
+        self.per_model_stats: dict[str, dict] = {}
         # Per-call snapshot, populated on every API response so the cycle
         # summary can show reasoning vs visible breakdown against the cap.
         self.last_call_model: Optional[str] = None
@@ -33,6 +37,7 @@ class ApiManager(metaclass=Singleton):
         self.total_cost = 0
         self.total_budget = 0.0
         self.models = None
+        self.per_model_stats = {}
         self.last_call_model = None
         self.last_call_prompt_tokens = 0
         self.last_call_completion_tokens = 0
@@ -68,23 +73,43 @@ class ApiManager(metaclass=Singleton):
         self.last_call_completion_tokens = completion_tokens
         self.last_call_reasoning_tokens = reasoning_tokens
 
-        if model not in ALL_MODELS:
-            logger.warn(f"Unknown model '{model}' for cost tracking, skipping.")
-            self.total_prompt_tokens += prompt_tokens
-            self.total_completion_tokens += completion_tokens
-            self.total_reasoning_tokens += reasoning_tokens
-            return
+        # Dollar cost of this single call, priced from the per-model table.
+        # Unknown models still have their tokens counted (so token totals stay
+        # correct) but contribute $0 because we have no price for them.
+        call_cost = 0.0
+        if model in ALL_MODELS:
+            model_info = ALL_MODELS[model]
+            call_cost += prompt_tokens * model_info.prompt_token_cost / 1000
+            if issubclass(type(model_info), CompletionModelInfo):
+                call_cost += completion_tokens * model_info.completion_token_cost / 1000
+        else:
+            logger.warn(
+                f"Unknown model '{model}' for cost tracking; "
+                "tokens counted, cost recorded as $0."
+            )
 
-        model_info = ALL_MODELS[model]
-
+        # Global running totals.
         self.total_prompt_tokens += prompt_tokens
         self.total_completion_tokens += completion_tokens
         self.total_reasoning_tokens += reasoning_tokens
-        self.total_cost += prompt_tokens * model_info.prompt_token_cost / 1000
-        if issubclass(type(model_info), CompletionModelInfo):
-            self.total_cost += (
-                completion_tokens * model_info.completion_token_cost / 1000
-            )
+        self.total_cost += call_cost
+
+        # Per-model breakdown (mirrors the global totals but split by model).
+        stats = self.per_model_stats.setdefault(
+            model,
+            {
+                "calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "reasoning_tokens": 0,
+                "cost": 0.0,
+            },
+        )
+        stats["calls"] += 1
+        stats["prompt_tokens"] += prompt_tokens
+        stats["completion_tokens"] += completion_tokens
+        stats["reasoning_tokens"] += reasoning_tokens
+        stats["cost"] += call_cost
 
         logger.debug(f"Total running cost: ${self.total_cost:.3f}")
 
@@ -114,6 +139,27 @@ class ApiManager(metaclass=Singleton):
         int: The total number of completion tokens.
         """
         return self.total_completion_tokens
+
+    def get_total_reasoning_tokens(self):
+        """
+        Get the total number of invisible reasoning tokens (a subset of the
+        completion tokens, produced only by reasoning models).
+
+        Returns:
+        int: The total number of reasoning tokens.
+        """
+        return self.total_reasoning_tokens
+
+    def get_per_model_stats(self) -> dict:
+        """
+        Get the per-model token/cost breakdown accumulated so far.
+
+        Returns a copy keyed by model name; each value carries
+        calls / prompt_tokens / completion_tokens / reasoning_tokens / cost.
+        For reasoning models, reasoning_tokens is the invisible subset of
+        completion_tokens, so visible output = completion_tokens - reasoning_tokens.
+        """
+        return {model: dict(stats) for model, stats in self.per_model_stats.items()}
 
     def get_total_cost(self):
         """

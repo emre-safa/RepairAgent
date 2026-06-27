@@ -35,8 +35,8 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name="gpt-4o-mini-2024-07-18",
-            prompt_token_cost=0.002,  # $2/M
-            completion_token_cost=0.006,  # $6/M
+            prompt_token_cost=0.00015,  # $0.15/M
+            completion_token_cost=0.0006,  # $0.60/M
             max_tokens=128000,
             supports_functions=True,
         ),

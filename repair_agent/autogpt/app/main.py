@@ -339,6 +339,7 @@ def run_interaction_loop(
             logger.typewriter_log("SYSTEM: ", Fore.YELLOW, "Unable to execute command")
 
         _display_cycle_cost_summary()
+        _persist_token_usage(agent)
 
 
 def update_user(
@@ -638,6 +639,109 @@ def _display_cycle_cost_summary() -> None:
 
     summary += "[/dim]"
     logger.console.print(summary)
+
+
+def _roles_for_model(recorded_model: str, config: Config) -> list[str]:
+    """Map a recorded model name back to the config role(s) it serves.
+
+    Token usage is recorded under the model name the provider reports, which
+    may be a dated variant (e.g. ``gpt-5-2025-08-07``) while the config holds a
+    rolling alias (``gpt-5``). We resolve aliases through the model mapping so a
+    smart_llm / static_llm / fast_llm label can be attached in the report.
+    """
+    from autogpt.llm.providers.openai import chat_model_mapping
+
+    roles: list[str] = []
+    role_models = {
+        "smart_llm": getattr(config, "smart_llm", None),
+        "static_llm": getattr(config, "static_llm", None),
+        "fast_llm": getattr(config, "fast_llm", None),
+    }
+    for role, role_model in role_models.items():
+        if not role_model:
+            continue
+        candidates = {role_model, chat_model_mapping.get(role_model, role_model)}
+        if recorded_model in candidates:
+            roles.append(role)
+    return roles
+
+
+def _persist_token_usage(agent: Agent) -> None:
+    """Write a per-bug token/cost report to the experiment's token_stats dir.
+
+    A full cumulative snapshot is overwritten after every cycle, so an
+    interrupted run still leaves its latest accounting on disk. Usage is split
+    per model (so a reasoning smart_llm and a non-reasoning static_llm are
+    reported separately with their own pricing), and for reasoning models the
+    invisible reasoning-token subset is broken out from visible output.
+
+    Because the snapshot is cumulative and is written after the command has
+    executed, it includes every cycle — including cycles where a reasoning
+    model burned its whole completion budget on internal reasoning and returned
+    no visible text (those tokens are metered when the response is parsed,
+    before the budget-exhausted path is taken).
+    """
+    import json
+    import os
+
+    experiment_dir = getattr(agent, "experiment_dir", None)
+    project_name = getattr(agent, "project_name", None)
+    bug_index = getattr(agent, "bug_index", None)
+    if not experiment_dir or project_name is None or bug_index is None:
+        return
+
+    # This is pure accounting bolted onto the side of the loop: it must NEVER
+    # disrupt the fix-cycle pipeline. Any failure (metadata shape, filesystem,
+    # serialization, ...) is logged and swallowed so the experiment keeps going.
+    try:
+        api_manager = ApiManager()
+        config = agent.config
+
+        per_model = {}
+        for model, stats in api_manager.get_per_model_stats().items():
+            visible = max(stats["completion_tokens"] - stats["reasoning_tokens"], 0)
+            per_model[model] = {
+                "roles": _roles_for_model(model, config),
+                "calls": stats["calls"],
+                "prompt_tokens": stats["prompt_tokens"],
+                "completion_tokens": stats["completion_tokens"],
+                "reasoning_tokens": stats["reasoning_tokens"],
+                "visible_completion_tokens": visible,
+                "cost_usd": round(stats["cost"], 6),
+            }
+
+        total_prompt = api_manager.get_total_prompt_tokens()
+        total_completion = api_manager.get_total_completion_tokens()
+        total_reasoning = api_manager.get_total_reasoning_tokens()
+        report = {
+            "project_name": project_name,
+            "bug_index": bug_index,
+            "experiment_dir": experiment_dir,
+            "cycles_completed": getattr(agent, "cycle_count", None),
+            "totals": {
+                "prompt_tokens": total_prompt,
+                "completion_tokens": total_completion,
+                "reasoning_tokens": total_reasoning,
+                "visible_completion_tokens": max(total_completion - total_reasoning, 0),
+                "total_tokens": total_prompt + total_completion,
+                "cost_usd": round(api_manager.get_total_cost(), 6),
+            },
+            "per_model": per_model,
+        }
+
+        stats_dir = os.path.join(
+            "experimental_setups", experiment_dir, "token_stats"
+        )
+        out_path = os.path.join(
+            stats_dir, f"token_usage_{project_name}_{bug_index}.json"
+        )
+        os.makedirs(stats_dir, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+    except Exception as err:
+        logger.warn(
+            f"Failed to write token usage report: {err.__class__.__name__}: {err}"
+        )
 
 
 def remove_ansi_escape(s: str) -> str:

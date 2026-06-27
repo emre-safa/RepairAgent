@@ -344,6 +344,60 @@ def _get_chat_model(model):
     return ChatOpenAI(model=model, temperature=temperature)
 
 
+def _record_langchain_usage(response, model):
+    """Feed a LangChain chat response's token usage into the ApiManager.
+
+    The static_llm path uses LangChain's ``chat.invoke()`` directly, which
+    bypasses the ``meter_api`` decorator that meters the smart_llm path. Without
+    this, static_llm tokens/cost would be invisible to the accounting. We read
+    usage from the response metadata (the standardized ``usage_metadata`` when
+    present, else the provider-specific ``response_metadata``) and route it
+    through the same ApiManager.update_cost used everywhere else, so per-model
+    totals and pricing stay consistent.
+    """
+    try:
+        from autogpt.llm.api_manager import ApiManager
+
+        prompt_tokens = completion_tokens = reasoning_tokens = 0
+
+        usage_meta = getattr(response, "usage_metadata", None)
+        meta = getattr(response, "response_metadata", None) or {}
+
+        if usage_meta:  # newer LangChain: standardized field (handles reasoning)
+            prompt_tokens = usage_meta.get("input_tokens", 0) or 0
+            completion_tokens = usage_meta.get("output_tokens", 0) or 0
+            details = usage_meta.get("output_token_details", {}) or {}
+            reasoning_tokens = details.get("reasoning", 0) or 0
+        elif "token_usage" in meta:  # OpenAI via langchain-community
+            tu = meta["token_usage"] or {}
+            prompt_tokens = tu.get("prompt_tokens", 0) or 0
+            completion_tokens = tu.get("completion_tokens", 0) or 0
+            details = tu.get("completion_tokens_details", {}) or {}
+            if isinstance(details, dict):
+                reasoning_tokens = details.get("reasoning_tokens", 0) or 0
+        elif "usage" in meta:  # Anthropic
+            u = meta["usage"] or {}
+            prompt_tokens = u.get("input_tokens", 0) or 0
+            completion_tokens = u.get("output_tokens", 0) or 0
+
+        if prompt_tokens or completion_tokens:
+            ApiManager().update_cost(
+                prompt_tokens,
+                completion_tokens,
+                model,
+                reasoning_tokens=reasoning_tokens,
+            )
+        else:
+            logger.warn(
+                f"No token usage found on static LLM response for model '{model}'; "
+                "skipping accounting for this call."
+            )
+    except Exception as err:
+        logger.warn(
+            f"Failed to record static LLM usage: {err.__class__.__name__}: {err}"
+        )
+
+
 def query_for_fix(query, model):
     chat = _get_chat_model(model)
 
@@ -358,6 +412,7 @@ def query_for_fix(query, model):
             )  
     ]
     response = chat.invoke(messages)
+    _record_langchain_usage(response, model)
 
     return response.content
 
@@ -378,6 +433,7 @@ def query_for_mutants(query, model):
     ]
     #response_format={ "type": "json_object" }
     response = chat.invoke(messages)
+    _record_langchain_usage(response, model)
 
     return response.content
 
@@ -421,6 +477,7 @@ def query_for_commands(query, model):
     ]
     #response_format={ "type": "json_object" }
     response = chat.invoke(messages)
+    _record_langchain_usage(response, model)
 
     return response.content
 
@@ -527,6 +584,7 @@ def auto_complete_functions(project_name, bug_index, file_path, method_name, mod
         ]
         #response_format={ "type": "json_object" }
     response = chat.invoke(messages)
+    _record_langchain_usage(response, model)
     return response.content
 
 def extract_command(

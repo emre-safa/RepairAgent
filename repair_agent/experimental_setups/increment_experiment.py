@@ -26,6 +26,7 @@ with open(EXPERIMENTS_LIST, "a+") as expl:
             os.mkdir(os.path.join(new_dir, "saved_contexts"))
             os.mkdir(os.path.join(new_dir, "mutations_history"))
             os.mkdir(os.path.join(new_dir, "plausible_patches"))
+            os.mkdir(os.path.join(new_dir, "token_stats"))
         except Exception:
             shutil.rmtree(new_dir, ignore_errors=True)
             raise
